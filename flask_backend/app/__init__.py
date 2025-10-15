@@ -13,6 +13,7 @@ app.url_map.strict_slashes = False
 # - Allow only the React dev origin on 3000
 # - Include exact HTTPS origin with port 3000 for cloud preview:
 #   https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3000
+# - Backend is on port 3001 under the same host. CORS must allow the frontend origin(s) only.
 # - Allow common methods and headers
 # - Do not use credentials for this simple app
 CORS(

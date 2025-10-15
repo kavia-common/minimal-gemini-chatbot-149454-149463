@@ -92,9 +92,13 @@ def _handle_chat(message: str):
     api_key = os.getenv("GEMINI_API_KEY")
     allow_fake = _bool_env("ALLOW_FAKE_GEMINI", False)
 
+    # Log API key presence (not the key), and package availability for diagnostics
+    api_key_present = bool(api_key and api_key.strip())
+    logger.info("Gemini setup: api_key_present=%s, genai_available=%s", api_key_present, genai is not None)
+
     # Initialization guard: if no key or package missing, return fake or friendly fallback
-    if not api_key or genai is None:
-        if not api_key:
+    if not api_key_present or genai is None:
+        if not api_key_present:
             logger.warning("GEMINI_API_KEY is missing or empty. Using fallback (allow_fake=%s).", allow_fake)
         if genai is None:
             logger.error("google-generativeai package not available. Using fallback (allow_fake=%s).", allow_fake)
@@ -111,9 +115,10 @@ def _handle_chat(message: str):
         for model_name in model_name_candidates:
             try:
                 model = genai.GenerativeModel(model_name)
-                # Generate concise reply
+                # Generate concise reply with a conservative server-side timeout
                 response = model.generate_content(
-                    f"Provide a concise helpful reply to the user message:\n\n{message}"
+                    f"Provide a concise helpful reply to the user message:\n\n{message}",
+                    request_options={"timeout": 15},
                 )
                 # google-generativeai responses may contain .text or candidates; prefer .text
                 reply_text = getattr(response, "text", None)
@@ -125,7 +130,8 @@ def _handle_chat(message: str):
                         reply_text = " ".join(
                             [getattr(p, "text", "") for p in parts if getattr(p, "text", "")]
                         ).strip()
-                    except Exception:
+                    except Exception as parse_err:
+                        logger.debug("Candidate parse failed: %s", parse_err)
                         reply_text = None
 
                 if not reply_text:
@@ -137,17 +143,18 @@ def _handle_chat(message: str):
                 return {"reply": reply_text[:2000]}  # hard cap
             except Exception as e:  # try next model if available
                 last_error = e
-                logger.warning("Model '%s' failed: %s", model_name, str(e))
+                # Include type for better diagnostics while avoiding sensitive data
+                logger.warning("Model '%s' failed (%s): %s", model_name, type(e).__name__, str(e))
                 continue
 
         # If all models failed, log and fallback
-        logger.error("All model attempts failed: %s", str(last_error))
+        logger.error("All model attempts failed: %s: %s", type(last_error).__name__ if last_error else "UnknownError", str(last_error))
         return _fake_or_fallback(message, allow_fake)
     except ValidationError as ve:
         _safe_abort_bad_request(str(ve))
     except Exception as e:
         # Any unexpected runtime errors: log and fallback, do not leak stack traces
-        logger.exception("Unexpected error during chat handling: %s", str(e))
+        logger.exception("Unexpected error during chat handling: %s: %s", type(e).__name__, str(e))
         return _fake_or_fallback(message, allow_fake)
 
 
