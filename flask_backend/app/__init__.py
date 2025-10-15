@@ -8,7 +8,19 @@ from .routes.chat import blp as chat_blp
 
 app = Flask(__name__)
 app.url_map.strict_slashes = False
-CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
+
+# Configure CORS explicitly to ensure preflight and error responses include headers.
+# - Allow only the React dev origin on 3000
+# - Allow common methods and headers
+# - Do not use credentials for this simple app
+CORS(
+    app,
+    resources={r"/*": {"origins": ["http://localhost:3000"]}},
+    supports_credentials=False,
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    expose_headers=["Content-Type"],
+)
 
 # OpenAPI / Swagger settings
 app.config["API_TITLE"] = "My Flask API"
