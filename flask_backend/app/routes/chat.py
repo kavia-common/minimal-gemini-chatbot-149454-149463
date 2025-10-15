@@ -1,7 +1,7 @@
 import os
 import logging
 from flask import make_response
-from flask_smorest import Blueprint, abort
+from flask_smorest import Blueprint
 from marshmallow import Schema, fields, ValidationError
 from flask.views import MethodView
 
@@ -79,8 +79,14 @@ def _bool_env(name: str, default: bool = False) -> bool:
 
 
 def _safe_abort_bad_request(msg: str):
-    # Consistent 400 shape
-    abort(400, message={"error": msg})
+    """
+    Return a normalized 400 with {"error": "<msg>"} shape without flask-smorest's nested wrapper,
+    so the frontend can reliably parse and show error.message.
+    """
+    from flask import jsonify
+    resp = jsonify({"error": msg})
+    resp.status_code = 400
+    return resp
 
 
 def _handle_chat(message: str):
@@ -108,8 +114,9 @@ def _handle_chat(message: str):
         # Configure client
         genai.configure(api_key=api_key)
 
-        # Prefer gemini-1.5-flash; fallback to gemini-pro if needed
-        model_name_candidates = ["gemini-1.5-flash", "gemini-pro"]
+        # Prefer gemini-1.5-flash; fallback to gemini-pro if needed. Users can override via GEMINI_MODEL.
+        env_model = os.getenv("GEMINI_MODEL", "").strip()
+        model_name_candidates = [env_model] if env_model else ["gemini-1.5-flash", "gemini-pro"]
         last_error = None
 
         for model_name in model_name_candidates:
@@ -121,25 +128,51 @@ def _handle_chat(message: str):
                     request_options={"timeout": 15},
                 )
                 # google-generativeai responses may contain .text or candidates; prefer .text
-                reply_text = getattr(response, "text", None)
-                if not reply_text and hasattr(response, "candidates") and response.candidates:
-                    # Fallback: attempt to read from first candidate content parts
-                    cand = response.candidates[0]
+                reply_text = None
+                try:
+                    # Primary path
+                    reply_text = getattr(response, "text", None)
+                except Exception as rt_err:
+                    logger.debug("Reading response.text failed: %s", rt_err)
+
+                # Secondary path: inspect candidates safely
+                if not reply_text:
                     try:
-                        parts = cand.content.parts if hasattr(cand, "content") else []
-                        reply_text = " ".join(
-                            [getattr(p, "text", "") for p in parts if getattr(p, "text", "")]
-                        ).strip()
+                        if hasattr(response, "candidates") and response.candidates:
+                            cand = response.candidates[0]
+                            parts = []
+                            if hasattr(cand, "content") and getattr(cand, "content") is not None:
+                                parts = getattr(cand.content, "parts", []) or []
+                            # Some SDK versions use dict-like parts
+                            texts = []
+                            for p in parts:
+                                if hasattr(p, "text"):
+                                    if p.text:
+                                        texts.append(p.text)
+                                elif isinstance(p, dict):
+                                    t = p.get("text")
+                                    if t:
+                                        texts.append(t)
+                            candidate_text = " ".join(texts).strip()
+                            if candidate_text:
+                                reply_text = candidate_text
                     except Exception as parse_err:
                         logger.debug("Candidate parse failed: %s", parse_err)
                         reply_text = None
 
+                # Tertiary path: raw dump as last resort (still normalized to string)
                 if not reply_text:
+                    try:
+                        reply_text = str(response)
+                    except Exception:
+                        reply_text = None
+
+                if not reply_text or not str(reply_text).strip():
                     # If model returned nothing meaningful, raise to try next model or fallback
                     raise RuntimeError("Model returned empty response")
 
                 # Keep responses concise
-                reply_text = reply_text.strip()
+                reply_text = str(reply_text).strip()
                 return {"reply": reply_text[:2000]}  # hard cap
             except Exception as e:  # try next model if available
                 last_error = e
