@@ -58,6 +58,12 @@ class ChatResource(MethodView):
             abort(400, message={"error": "The 'message' field must be a non-empty string."})
 
         api_key = os.getenv("GEMINI_API_KEY")
+        allow_fake = os.getenv("ALLOW_FAKE_GEMINI", "false").lower() in ("1", "true", "yes", "on")
+
+        # If no API key and fake mode allowed, return a deterministic stub to enable UI verification
+        if not api_key and allow_fake:
+            return {"reply": f"Echo: {message.strip()}"}
+
         if not api_key:
             abort(500, message={"error": "GEMINI_API_KEY environment variable is not set."})
 
