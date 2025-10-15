@@ -7,24 +7,41 @@ Backend (Flask) CORS and preflight are configured for:
 Allowed methods: [GET, POST, OPTIONS]
 Allowed headers: [Content-Type, Authorization]
 
-Two endpoints are available (backend base http://localhost:3001 or https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3001):
+Three endpoints are available (backend base http://localhost:3001 or https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3001):
 - POST /api/chat
 - POST /api/message (alternate path to avoid ad-blockers)
+- POST /api/send (final alias if other paths are blocked)
 
 Frontend fetch example (React):
 ```js
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:3001';
-const endpoint = `${API_BASE}/api/message`; // prefer /message to avoid ad-blockers
 
+// Prefer /message; retry with /send if blocked by extensions
 async function sendMessage(message) {
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-      // Do not set Authorization unless needed; avoid custom headers that trigger preflight failures.
-    },
-    body: JSON.stringify({ message })
-  });
+  const tryFetch = async (path) => {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+        // Do not set Authorization unless needed; avoid custom headers that trigger preflight failures.
+      },
+      body: JSON.stringify({ message })
+    });
+    return res;
+  };
+
+  let res;
+  try {
+    res = await tryFetch('/api/message');
+  } catch (e) {
+    // network-level failure (e.g., ad-block)
+    try {
+      res = await tryFetch('/api/send');
+    } catch (e2) {
+      return { error: 'Network error' };
+    }
+  }
+
   const data = await res.json().catch(() => ({ error: 'Invalid JSON' }));
   return data;
 }
@@ -32,6 +49,7 @@ async function sendMessage(message) {
 
 If you see net::ERR_BLOCKED_BY_CLIENT, try:
 - Use /api/message instead of /api/chat
+- If still blocked, use /api/send
 - Disable ad-blocking extensions for localhost
 - Ensure only 'Content-Type: application/json' is set in headers
 
@@ -54,6 +72,10 @@ curl -i https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3001/
 
 2) Real call (requires GEMINI_API_KEY set in backend env)
 curl -i -X POST https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3001/api/message \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Hello from curl"}'
+# If blocked by client, try:
+curl -i -X POST https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3001/api/send \
   -H "Content-Type: application/json" \
   -d '{"message":"Hello from curl"}'
 

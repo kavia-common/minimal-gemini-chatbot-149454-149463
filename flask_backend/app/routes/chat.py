@@ -35,7 +35,9 @@ class ChatRequestSchema(Schema):
         """Schema for chat request containing a single 'message' string field."""
         super().__init__(*args, **kwargs)
 
-    message = fields.String(required=True, allow_none=False, metadata={"description": "User message"})
+    # Do not force 'required=True' here to avoid 422 validation errors from flask-smorest.
+    # We validate presence/emptiness ourselves to normalize to 400 with {"error": "..."}.
+    message = fields.String(required=False, allow_none=True, metadata={"description": "User message"})
 
 
 class ChatResponseSchema(Schema):
@@ -69,7 +71,7 @@ def _fake_or_fallback(message: str, allow_fake: bool) -> dict:
     """
     # PUBLIC_INTERFACE
     if allow_fake:
-        return {"reply": f"Echo: {message.strip()}"}
+        return {"reply": f"Echo: {str(message).strip()}"}
     return _friendly_fallback(message)
 
 
@@ -90,10 +92,10 @@ def _safe_abort_bad_request(msg: str):
 
 
 def _handle_chat(message: str):
-    """Core handler shared by both /chat and /message routes."""
+    """Core handler shared by all chat endpoints (/chat, /message, /send)."""
     # Validate non-empty trimmed message
     if not isinstance(message, str) or not message.strip():
-        _safe_abort_bad_request("message is required")
+        return _safe_abort_bad_request("message is required")
 
     api_key = os.getenv("GEMINI_API_KEY")
     allow_fake = _bool_env("ALLOW_FAKE_GEMINI", False)
@@ -184,7 +186,7 @@ def _handle_chat(message: str):
         logger.error("All model attempts failed: %s: %s", type(last_error).__name__ if last_error else "UnknownError", str(last_error))
         return _fake_or_fallback(message, allow_fake)
     except ValidationError as ve:
-        _safe_abort_bad_request(str(ve))
+        return _safe_abort_bad_request(str(ve))
     except Exception as e:
         # Any unexpected runtime errors: log and fallback, do not leak stack traces
         logger.exception("Unexpected error during chat handling: %s: %s", type(e).__name__, str(e))
@@ -196,7 +198,7 @@ class ChatResource(MethodView):
     # PUBLIC_INTERFACE
     @blp.arguments(ChatRequestSchema, as_kwargs=True)
     @blp.response(200, ChatResponseSchema)
-    def post(self, message: str):
+    def post(self, message=None):
         """
         Handle chat requests and return a concise reply.
 
@@ -225,7 +227,7 @@ class MessageResource(MethodView):
     # PUBLIC_INTERFACE
     @blp.arguments(ChatRequestSchema, as_kwargs=True)
     @blp.response(200, ChatResponseSchema)
-    def post(self, message: str):
+    def post(self, message=None):
         """
         Alternate endpoint for posting messages (alias of /api/chat). Useful if
         client-side blockers interfere with the 'chat' keyword.
@@ -242,6 +244,35 @@ class MessageResource(MethodView):
     def options(self):
         """
         Preflight request handler for /api/message.
+
+        Returns:
+          - 204 No Content with appropriate CORS headers
+        """
+        return _ok_preflight_response()
+
+
+@blp.route("/send")
+class SendResource(MethodView):
+    # PUBLIC_INTERFACE
+    @blp.arguments(ChatRequestSchema, as_kwargs=True)
+    @blp.response(200, ChatResponseSchema)
+    def post(self, message=None):
+        """
+        Final alias endpoint for posting messages (alias of /api/chat and /api/message).
+        This can help avoid path-based blockers or aggressive content filters.
+
+        Request body:
+          - message: string (required)
+
+        Returns:
+          - 200: JSON { "reply": string } on success or friendly fallback when model is unavailable
+          - 400: JSON { "error": string } on client errors
+        """
+        return _handle_chat(message)
+
+    def options(self):
+        """
+        Preflight request handler for /api/send.
 
         Returns:
           - 204 No Content with appropriate CORS headers
