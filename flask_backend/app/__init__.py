@@ -15,7 +15,14 @@ app.url_map.strict_slashes = False
 # - Do not use credentials for this simple app
 CORS(
     app,
-    resources={r"/*": {"origins": ["http://localhost:3000"]}},
+    resources={
+        r"/*": {
+            "origins": [
+                "http://localhost:3000",
+                "https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3000",
+            ]
+        }
+    },
     supports_credentials=False,
     methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
