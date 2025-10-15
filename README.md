@@ -31,3 +31,10 @@ If you see net::ERR_BLOCKED_BY_CLIENT, try:
 Environment variables:
 - GEMINI_API_KEY: required for real responses
 - ALLOW_FAKE_GEMINI=true: returns a stubbed reply "Echo: <message>" for testing without an API key
+
+Behavior:
+- If GEMINI_API_KEY is missing/invalid:
+  - When ALLOW_FAKE_GEMINI=true, endpoints return 200 with {"reply":"Echo: <message>"}.
+  - Otherwise endpoints return 200 with a friendly fallback {"reply":"Sorry, I'm having trouble responding right now. Please try again."}.
+- Invalid input (missing/empty "message") returns 400 with {"error":"message is required"}.
+- No raw 500s are exposed to the client for typical failures; errors are logged server-side.

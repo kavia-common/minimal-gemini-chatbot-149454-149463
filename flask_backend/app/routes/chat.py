@@ -1,4 +1,5 @@
 import os
+import logging
 from flask import make_response
 from flask_smorest import Blueprint, abort
 from marshmallow import Schema, fields, ValidationError
@@ -9,6 +10,15 @@ try:
     import google.generativeai as genai
 except Exception:  # pragma: no cover - import error handled during runtime if missing
     genai = None
+
+# Basic logger setup for this module
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 
 blp = Blueprint(
@@ -43,24 +53,52 @@ def _ok_preflight_response():
     return resp
 
 
+def _friendly_fallback(message: str) -> dict:
+    """
+    Return a deterministic friendly reply used when the model is unavailable or errors occur.
+    This ensures the frontend always receives a 200 with a usable reply and never a raw 500.
+    """
+    # PUBLIC_INTERFACE
+    reply = "Sorry, I'm having trouble responding right now. Please try again."
+    return {"reply": reply}
+
+
+def _fake_or_fallback(message: str, allow_fake: bool) -> dict:
+    """
+    Helper to return either the fake echo (when ALLOW_FAKE_GEMINI=true) or the friendly fallback.
+    """
+    # PUBLIC_INTERFACE
+    if allow_fake:
+        return {"reply": f"Echo: {message.strip()}"}
+    return _friendly_fallback(message)
+
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    val = os.getenv(name, str(default)).lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _safe_abort_bad_request(msg: str):
+    # Consistent 400 shape
+    abort(400, message={"error": msg})
+
+
 def _handle_chat(message: str):
     """Core handler shared by both /chat and /message routes."""
     # Validate non-empty trimmed message
     if not isinstance(message, str) or not message.strip():
-        abort(400, message={"error": "The 'message' field must be a non-empty string."})
+        _safe_abort_bad_request("message is required")
 
     api_key = os.getenv("GEMINI_API_KEY")
-    allow_fake = os.getenv("ALLOW_FAKE_GEMINI", "false").lower() in ("1", "true", "yes", "on")
+    allow_fake = _bool_env("ALLOW_FAKE_GEMINI", False)
 
-    # If no API key and fake mode allowed, return a deterministic stub to enable UI verification
-    if not api_key and allow_fake:
-        return {"reply": f"Echo: {message.strip()}"}
-
-    if not api_key:
-        abort(500, message={"error": "GEMINI_API_KEY environment variable is not set."})
-
-    if genai is None:
-        abort(500, message={"error": "google-generativeai package is not installed."})
+    # Initialization guard: if no key or package missing, return fake or friendly fallback
+    if not api_key or genai is None:
+        if not api_key:
+            logger.warning("GEMINI_API_KEY is missing or empty. Using fallback (allow_fake=%s).", allow_fake)
+        if genai is None:
+            logger.error("google-generativeai package not available. Using fallback (allow_fake=%s).", allow_fake)
+        return _fake_or_fallback(message, allow_fake)
 
     try:
         # Configure client
@@ -91,7 +129,7 @@ def _handle_chat(message: str):
                         reply_text = None
 
                 if not reply_text:
-                    # If model returned nothing meaningful, raise to try next model or 500
+                    # If model returned nothing meaningful, raise to try next model or fallback
                     raise RuntimeError("Model returned empty response")
 
                 # Keep responses concise
@@ -99,14 +137,18 @@ def _handle_chat(message: str):
                 return {"reply": reply_text[:2000]}  # hard cap
             except Exception as e:  # try next model if available
                 last_error = e
+                logger.warning("Model '%s' failed: %s", model_name, str(e))
                 continue
 
-        # If all models failed
-        raise RuntimeError(f"All model attempts failed: {last_error}")
+        # If all models failed, log and fallback
+        logger.error("All model attempts failed: %s", str(last_error))
+        return _fake_or_fallback(message, allow_fake)
     except ValidationError as ve:
-        abort(400, message={"error": str(ve)})
+        _safe_abort_bad_request(str(ve))
     except Exception as e:
-        abort(500, message={"error": f"Failed to generate reply: {str(e)}"})
+        # Any unexpected runtime errors: log and fallback, do not leak stack traces
+        logger.exception("Unexpected error during chat handling: %s", str(e))
+        return _fake_or_fallback(message, allow_fake)
 
 
 @blp.route("/chat")
@@ -122,9 +164,8 @@ class ChatResource(MethodView):
           - message: string (required) - the user's input.
 
         Returns:
-          - 200: JSON { "reply": string } on success
+          - 200: JSON { "reply": string } on success or friendly fallback when model is unavailable
           - 400: JSON { "error": string } on client errors (missing/empty message)
-          - 500: JSON { "error": string } on server errors (e.g., model/API failures)
         """
         return _handle_chat(message)
 
@@ -153,8 +194,8 @@ class MessageResource(MethodView):
           - message: string (required)
 
         Returns:
-          - 200: JSON { "reply": string } on success
-          - 4xx/5xx: JSON { "error": string } on errors
+          - 200: JSON { "reply": string } on success or friendly fallback when model is unavailable
+          - 400: JSON { "error": string } on client errors
         """
         return _handle_chat(message)
 
