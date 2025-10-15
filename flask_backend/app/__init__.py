@@ -8,7 +8,7 @@ from .routes.chat import blp as chat_blp
 
 app = Flask(__name__)
 app.url_map.strict_slashes = False
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
 
 # OpenAPI / Swagger settings
 app.config["API_TITLE"] = "My Flask API"

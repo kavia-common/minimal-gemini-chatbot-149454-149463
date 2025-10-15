@@ -1,6 +1,7 @@
 import os
 from flask_smorest import Blueprint, abort
 from marshmallow import Schema, fields, ValidationError
+from flask.views import MethodView
 
 # Attempt to import google.generativeai; will be installed via requirements.txt
 try:
@@ -36,7 +37,7 @@ class ChatResponseSchema(Schema):
 
 
 @blp.route("/chat")
-class ChatResource:
+class ChatResource(MethodView):
     # PUBLIC_INTERFACE
     @blp.arguments(ChatRequestSchema, as_kwargs=True)
     @blp.response(200, ChatResponseSchema)
