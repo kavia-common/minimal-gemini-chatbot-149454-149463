@@ -11,6 +11,8 @@ app.url_map.strict_slashes = False
 
 # Configure CORS explicitly to ensure preflight and error responses include headers.
 # - Allow only the React dev origin on 3000
+# - Include exact HTTPS origin with port 3000 for cloud preview:
+#   https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3000
 # - Allow common methods and headers
 # - Do not use credentials for this simple app
 CORS(
